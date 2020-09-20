@@ -1,32 +1,63 @@
 #!/bin/bash -l
 #$ -S /bin/bash
 #$ -cwd
-#$ -m e
 #$ -j y
+#$ -m eas
 #$ -pe omp 8
+#$ -N generate_ucsc_star_genomes
 
 # Build a set of STAR genomes for a given UCSC build
 # Adam Gower, based on scripts by Josh Campbell
 
-# If correct number of arguments were provided, use them and proceed;
-# otherwise, terminate with usage statement
-if [[ $# < 2 || $# > 3 ]]
+# Parse command-line arguments
+eval set -- "$(
+  getopt --options=b:f:o:s: \
+         --longoptions=build:,fasta-path:,output-path:,star-version: \
+         --name "$0" -- "$@"
+)"
+
+while true
+do
+  case "$1" in
+    -b|--build)
+      ucsc_build="$2"
+      shift 2 ;;
+    -f|--fasta-path)
+      fasta_path="$(readlink --canonicalize "$2")"
+      shift 2 ;;
+    -o|--output-path)
+      output_path="$(readlink --canonicalize "$2")"
+      shift 2 ;;
+    -s|--star-version)
+      star_version="$2"
+      shift 2 ;;
+    --)
+      shift
+      break ;;
+    *)
+      echo "Internal error"
+      exit 1 ;;
+  esac
+done
+
+if [[ ${ucsc_build} == "" ]]
 then
-  echo -n "Usage: generate_ucsc_star_genomes.qsub "
-  echo "[UCSC genome build] [Path to FASTA input files] [STAR module version]"
-  echo -n "e.g.:  generate_ucsc_star_genomes.qsub hg38 "
-  echo "/restricted/projectnb/cbmhive/references/ucsc/hg38 2.6.0c"
-  echo "If STAR module version is omitted, default module version is used."
+  echo    "Usage:"
+  echo -n "  qsub generate_ucsc_star_genomes.qsub [options] "
+  echo    "-b|--build [UCSC genome build]"
+  echo    "-f|--fasta-path [Path to FASTA files]"
+  echo    "Options:"
+  echo    "  -b, --build           UCSC genome build (e.g., hg38, mm10, etc.)"
+  echo    "  -f, --fasta-path      Path to FASTA input files"
+  echo -n "  -o, --output-path     "
+  echo -n "Path where output will be written "
+  echo    "(will be created if it does not exist)"
+  echo -n "                        "
+  echo    "(Default: ./[STAR version]/ucsc/[UCSC genome build]/)"
+  echo    "  -s, --star-version    Version of STAR to use"
+  echo    "                        (if omitted, default STAR module is used)"
 else
-  # Process command-line arguments
-  ucsc_build="${1}"
-  fasta_path="${2}"
-  star_version="${3}"
-
-  # Define paths
-  cbmhive_path="/restricted/projectnb/cbmhive"
-
-  if [[ $star_version == "" ]]
+  if [[ ${star_version} == "" ]]
   then
     # If no module version was specified, load the default module
     module load star
@@ -41,38 +72,47 @@ else
     fi
   fi
   # Get version of STAR module that was loaded
-  star_version=$(STAR --version | sed 's/STAR_//')
+  star_version="$(STAR --version | sed 's/STAR_//')"
 
-  output_path="$cbmhive_path/references/STAR/${star_version}/ucsc/${ucsc_build}"
+  # If output path is not specified, a directory named with the STAR version and
+  # UCSC genome build will be created within the current working directory,
+  # and output will be written there
+  if [[ "${output_path}" == "" ]]
+  then
+    output_path="$(pwd)/${star_version}/ucsc/${ucsc_build}"
+  fi
+  # Create the output path if it does not already exist
+  [ ! -d "${output_path}" ] && mkdir --verbose -p "${output_path}"/ 
+  # Ensure directory is not world-readable yet (to keep others out until ready)
+  chmod 2700 "${output_path}"/
 
   echo "UCSC genome build: ${ucsc_build}"
   echo "FASTA input files located in: ${fasta_path}/"
   echo "STAR version: ${star_version}"
   echo "STAR genomes will be written to: ${output_path}/"
 
-  # Create UCSC-build-level directory that is not world-readable yet
-  # (to keep users out until it's ready)
-  mkdir -p --mode=2700 ${output_path}/
+  cd "${fasta_path}"/ || exit
 
   # Run STAR in 'genomeGenerate' mode for each FASTA file
-  for type in $(ls $fasta_path/)
+  for type in *
   do
     # Create genome-level directory that is not world-readable yet
     # (to keep users out until it's ready)
-    mkdir --mode=2700 ${output_path}/${type}/
+    mkdir --verbose --mode=2700 "${output_path}"/${type}/
     # Generate genome
-    # Note: '--outTmpDir $TMPDIR' throws an error
-    #       (STAR needs to make the temporary directory itself)
+    # Note: '--outTmpDir $TMPDIR' throws an error;
+    #       STAR needs to make the temporary directory itself
     STAR \
       --runMode genomeGenerate \
-      --genomeDir ${output_path}/${type} \
-      --genomeFastaFiles ${fasta_path}/${type}/${ucsc_build}.fa \
-      --outFileNamePrefix ${output_path}/${type}/ \
+      --genomeDir "${output_path}"/${type} \
+      --genomeFastaFiles "${fasta_path}"/${type}/${ucsc_build}.fa \
+      --outFileNamePrefix "${output_path}"/${type}/ \
       --outTmpDir $TMPDIR/${type} \
       --runThreadN $NSLOTS
-    # Make genome-level directory world-readable and read-only
-    chmod -Rc ugo-w,ugo+rX ${output_path}/${type}/
   done
-  # Make UCSC-build-level directory world-readable and read-only
-  chmod ugo-w,ugo+rX ${output_path}/
+  # Make all output files and directories world-readable and read-only
+  chmod -Rc ugo-w,ugo+rX ${output_path}/
+
+  # Clean up scratch space
+  rm -rf ${TMPDIR:?}/*
 fi

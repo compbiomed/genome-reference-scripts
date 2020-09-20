@@ -2,113 +2,179 @@
 #$ -S /bin/bash
 #$ -cwd
 #$ -j y
+#$ -m eas
+#$ -N make_ucsc_references
 
 # Build a set of reference FASTA files and indexes for a given UCSC genome build
-# Adam Gower, based on script by Josh Campbell, originally derived from
+# Adam Gower, based on script by Josh Campbell, originally derived from:
 # https://github.com/infphilo/hisat2/tree/master/scripts/make_hg19.sh
 
-# Process command-line arguments
-# If correct number of arguments were provided, use them and proceed;
-# otherwise, terminate with usage statement
-if [[ $# < 1 || $# > 2 ]]
-then
-  echo "Usage: make_ucsc_references.qsub [UCSC genome build] [output path]"
-  echo "       [output path] default: './[UCSC genome build]/'"
-  echo "e.g.:  make_ucsc_references.qsub hg38"
-  echo "Output path will be created if it does not already exist."
-else
-  ucsc_build="${1}"
-  output_path="${2}"
+# Parse command-line arguments
+eval set -- "$(
+  getopt --options=b:o: \
+         --longoptions=build:,output-path: \
+         --name "$0" -- "$@"
+)"
 
+while true
+do
+  case "$1" in
+    -b|--build)
+      ucsc_build="$2"
+      shift 2 ;;
+    -o|--output-path)
+      output_path="$(readlink --canonicalize "$2")"
+      shift 2 ;;
+    --)
+      shift
+      break ;;
+    *)
+      echo "Internal error"
+      exit 1 ;;
+  esac
+done
+
+if [[ ${ucsc_build} == "" ]]
+then
+  echo    "Usage:"
+  echo -n "  qsub make_ucsc_references.qsub [options] "
+  echo    "-b|--build [UCSC genome build]"
+  echo    "Options:"
+  echo -n "  -b, --build          "
+  echo    "UCSC genome build (e.g., hg38, mm10, etc.)"
+  echo -n "  -o, --output-path    "
+  echo -n "Path where output will be written "
+  echo    "(will be created if it does not exist)"
+  echo    "                       (Default: ./[UCSC genome build]/)"
+else
   # If output path is not specified, a directory named with the UCSC genome
   # build will be created within the current working directory, and output will
   # be written there
-  if [[ $output_path == "" ]]
-  then
-    output_path="$(pwd)/${ucsc_build}"
-  fi
+  [[ "${output_path}" == "" ]] && output_path="$(pwd)/${ucsc_build}"
 
   # Load and list modules
   module load bwa
-  module load java picard
+  module load picard
   module load samtools
   module list
 
   # Define URLs
   ucsc_base_url="hgdownload.cse.ucsc.edu/goldenPath"
+  bigZips_url="ftp://${ucsc_base_url}/${ucsc_build}/bigZips"
 
-  echo "UCSC genome build: $ucsc_build"
-  echo "FASTA file and indexes will be written to: $output_path/"
+  # Define filenames
+  fa_gz_file="${ucsc_build}.fa.gz"
+  bigZips_filenames=(${fa_gz_file} md5sum.txt)
 
-  # Get FASTA files from UCSC to scratch space and descend to mirrored folder
-  cd $TMPDIR/
-  echo "Retrieving FASTA files for UCSC build $ucsc_build to $TMPDIR."
-  wget --mirror -np ftp://${ucsc_base_url}/${ucsc_build}/chromosomes/
-  cd ${ucsc_base_url}/${ucsc_build}/chromosomes/
-  # Verify MD5 checksums
-  md5sum --check md5sum.txt
+  # Display the parsed arguments
+  echo "UCSC genome build: ${ucsc_build}"
+  echo "FASTA file and indexes will be written to: ${output_path}/"
 
-  # Create genome-level directory that is not world-readable yet
-  # (to keep users out until it's ready)
-  mkdir -p --mode=2700 ${output_path}/
+  # Prepare for download
+  cd $TMPDIR/ || exit
+  echo "Retrieving files from ${bigZips_url}/ to: $TMPDIR"
+
+  # Try retrieving each file from UCSC to scratch space;
+  # if files could not be retrieved due to fatal error, terminate
+  for filename in ${bigZips_filenames[@]}
+  do
+    wget ${bigZips_url}/${filename}
+    if [[ ! -e ${filename} ]]
+    then
+      echo "File '${filename}' could not be retrieved; terminating."
+      exit
+    fi
+  done
+
+  # Verify MD5 checksum and print a message, terminating on nonzero exit code
+  # Note: for some reason, this does not work with 'md5sum --check - --status'
+  if [[ $(grep "${fa_gz_file}" md5sum.txt | md5sum --check - --quiet) ]]
+  then
+    echo "File '${fa_gz_file}' was not retrieved correctly; terminating."
+    exit
+  else
+    echo "File '${fa_gz_file}' was retrieved correctly; proceeding."
+  fi
+
+  # Extract each entry in the fa.gz file to a separate .fa file
+  echo "Splitting ${fa_gz_file} into individual .fa files."
+  zcat ${fa_gz_file} | csplit --digits=4 - "%>%" "/>/" "{*}"
+  # Rename the .fa files based on the header line
+  for fa_file in xx*
+  do
+    mv -v ${fa_file} "$(head -n 1 ${fa_file} | cut -f2 -d'>').fa"
+  done
+
+  # Create the output path if it does not already exist
+  [ ! -d "${output_path}" ] && mkdir --verbose -p "${output_path}"/ 
+  # Ensure directory is not world-readable yet (to keep others out until ready)
+  chmod 2700 "${output_path}"/
 
   # List "base" FASTA files (autosomes, X, Y, mtDNA)
   # Note: 'ls -v' is used to sort in "version" order instead of using default
   #       lexicographic sort (e.g., 1-22,X,Y instead of 1,10-19,2,20-22,3-9,X,Y)
   #       and chrM is listed separately so that it is placed after chrX and chrY
-  base_files=$(
-    ls -v chr*.fa.gz | grep -P "^chr([1-9][0-9]*|[XY])\.fa\.gz$"
-    ls chrM.fa.gz
+  base_files=(
+    $(
+      ls -v chr*.fa | grep -P "^chr([1-9][0-9]*|[XY])\.fa$"
+      ls chrM.fa
+    )
   )
   # Concatenate "base" FASTA files to create "base" reference genome
-  mkdir --mode=2700 ${output_path}/base/
-  zcat $base_files > ${output_path}/base/${ucsc_build}.fa
+  mkdir --verbose --mode=2700 "${output_path}"/base/
+  cat "${base_files[@]}" > "${output_path}"/base/${ucsc_build}.fa
 
-  # Note: two listings are used to ensure that chr[XY]_*_random.fa.gz appears
-  #       before chrUn_*.fa.gz
+  # Get a list of any FASTQ files corresponding to "random" contigs
+  # Note: two listings are used to ensure that chr[XY]_*_random.fa appears
+  #       before chrUn_*.fa
   # Note: '2>' throws away any output from stderr if the files are not found
-  random_files=$(
-    ls -v chr*_*_random.fa.gz 2> /dev/null
-    ls -v chrUn_*.fa.gz 2> /dev/null
+  random_files=(
+    $(
+      ls -v chr*_*_random.fa 2> /dev/null
+      ls -v chrUn_*.fa 2> /dev/null
+    )
   )
-  if [[ $random_files != "" ]]
+  if [[ ${#random_files[@]} > 0 ]]
   then
     # Add unplaced FASTA files to create "base_random" reference genome
-    mkdir --mode=2700 ${output_path}/base_random/
-    cp ${output_path}/base/${ucsc_build}.fa \
-       ${output_path}/base_random/${ucsc_build}.fa
-    zcat $random_files >> ${output_path}/base_random/${ucsc_build}.fa
-    # Note: hg19 includes filenames with format chr*_hap*.fa.gz;
-    #       hg38 includes filenames with format chr*_alt.fa.gz
+    mkdir --verbose --mode=2700 "${output_path}"/base_random/
+    cp "${output_path}"/base/${ucsc_build}.fa \
+       "${output_path}"/base_random/${ucsc_build}.fa
+    cat "${random_files[@]}" >> "${output_path}"/base_random/${ucsc_build}.fa
+
+    # Get a list of any alternative haplotype FASTA files
+    # Note: hg19 includes filenames with format chr*_hap*.fa;
+    #       hg38 includes filenames with format chr*_alt.fa
     # Note: '2>' throws away any output from stderr if the files are not found
-    althap_files=$(ls -v chr*_hap*.fa.gz chr*_alt.fa.gz 2> /dev/null)
-    if [[ $althap_files != "" ]]
+    althap_files=($(ls -v chr*_alt.fa chr*_hap*.fa 2> /dev/null))
+    if [[ ${#althap_files[@]} > 0 ]]
     then
-      # Add alternate haplotype FASTA files to create "base_random_althap"
-      # reference genome
-      mkdir --mode=2700 ${output_path}/base_random_althap/
-      cp ${output_path}/base_random/${ucsc_build}.fa \
-         ${output_path}/base_random_althap/${ucsc_build}.fa
-      zcat $althap_files >> ${output_path}/base_random_althap/${ucsc_build}.fa
+      # Add alternative haplotype FASTA files to create
+      # "base_random_althap" reference genome
+      mkdir --verbose --mode=2700 "${output_path}"/base_random_althap/
+      cp "${output_path}"/base_random/${ucsc_build}.fa \
+         "${output_path}"/base_random_althap/${ucsc_build}.fa
+      cat "${althap_files[@]}" >> \
+        "${output_path}"/base_random_althap/${ucsc_build}.fa
     fi
   fi
 
-  # Make various indices for each concatenated FASTA file
-  for type in $(ls ${output_path}/${type}/)
+  cd "${output_path}"/ || exit
+
+  # Make indices and sequence dictionary for each concatenated FASTA file
+  for type in *
   do
-    bwa index -a bwtsw ${output_path}/${type}/${ucsc_build}.fa
-    samtools faidx ${output_path}/${type}/${ucsc_build}.fa
-    # Note: changed $SCC_PICARD_LIB to $SCC_PICARD_BIN following SCC update
-    #       and change from picard 2.9.4 to 2.18.11 - 2019-07-16 ACG
-    java -jar $SCC_PICARD_BIN/picard.jar CreateSequenceDictionary \
-       REFERENCE=${output_path}/${type}/${ucsc_build}.fa \
-       OUTPUT=${output_path}/${type}/${ucsc_build}.dict
-    # Make genome-level directory world-readable and read-only
-    chmod -Rc ugo-w,ugo+rX ${output_path}/${type}/
+    bwa index -a bwtsw "${output_path}"/${type}/${ucsc_build}.fa
+    samtools faidx "${output_path}"/${type}/${ucsc_build}.fa
+    # Note: this step calls a wrapper script named 'picard' that calls Java
+    #       with the 'picard.jar' file and 2GB maximum heap size
+    picard CreateSequenceDictionary \
+       REFERENCE="${output_path}"/${type}/${ucsc_build}.fa \
+       OUTPUT="${output_path}"/${type}/${ucsc_build}.dict
   done
-  # Make UCSC-build-level directory world-readable and read-only
-  chmod ugo-w,ugo+rX ${output_path}/
+  # Make all output files and directories world-readable and read-only
+  chmod -Rc ugo-w,ugo+rX .
 
   # Clean up scratch space
-  rm -rf $TMPDIR/*
+  rm -rf ${TMPDIR:?}/*
 fi
