@@ -1,0 +1,114 @@
+#!/bin/bash -l
+#$ -S /bin/bash
+#$ -cwd
+#$ -j y
+
+# Build a set of reference FASTA files and indexes for a given UCSC genome build
+# Adam Gower, based on script by Josh Campbell, originally derived from
+# https://github.com/infphilo/hisat2/tree/master/scripts/make_hg19.sh
+
+# Process command-line arguments
+# If correct number of arguments were provided, use them and proceed;
+# otherwise, terminate with usage statement
+if [[ $# < 1 || $# > 2 ]]
+then
+  echo "Usage: make_ucsc_references.qsub [UCSC genome build] [output path]"
+  echo "       [output path] default: './[UCSC genome build]/'"
+  echo "e.g.:  make_ucsc_references.qsub hg38"
+  echo "Output path will be created if it does not already exist."
+else
+  ucsc_build="${1}"
+  output_path="${2}"
+
+  # If output path is not specified, a directory named with the UCSC genome
+  # build will be created within the current working directory, and output will
+  # be written there
+  if [[ $output_path == "" ]]
+  then
+    output_path="$(pwd)/${ucsc_build}"
+  fi
+
+  # Load and list modules
+  module load bwa
+  module load java picard
+  module load samtools
+  module list
+
+  # Define URLs
+  ucsc_base_url="hgdownload.cse.ucsc.edu/goldenPath"
+
+  echo "UCSC genome build: $ucsc_build"
+  echo "FASTA file and indexes will be written to: $output_path/"
+
+  # Get FASTA files from UCSC to scratch space and descend to mirrored folder
+  cd $TMPDIR/
+  echo "Retrieving FASTA files for UCSC build $ucsc_build to $TMPDIR."
+  wget --mirror -np ftp://${ucsc_base_url}/${ucsc_build}/chromosomes/
+  cd ${ucsc_base_url}/${ucsc_build}/chromosomes/
+  # Verify MD5 checksums
+  md5sum --check md5sum.txt
+
+  # Create genome-level directory that is not world-readable yet
+  # (to keep users out until it's ready)
+  mkdir -p --mode=2700 ${output_path}/
+
+  # List "base" FASTA files (autosomes, X, Y, mtDNA)
+  # Note: 'ls -v' is used to sort in "version" order instead of using default
+  #       lexicographic sort (e.g., 1-22,X,Y instead of 1,10-19,2,20-22,3-9,X,Y)
+  #       and chrM is listed separately so that it is placed after chrX and chrY
+  base_files=$(
+    ls -v chr*.fa.gz | grep -P "^chr([1-9][0-9]*|[XY])\.fa\.gz$"
+    ls chrM.fa.gz
+  )
+  # Concatenate "base" FASTA files to create "base" reference genome
+  mkdir --mode=2700 ${output_path}/base/
+  zcat $base_files > ${output_path}/base/${ucsc_build}.fa
+
+  # Note: two listings are used to ensure that chr[XY]_*_random.fa.gz appears
+  #       before chrUn_*.fa.gz
+  # Note: '2>' throws away any output from stderr if the files are not found
+  random_files=$(
+    ls -v chr*_*_random.fa.gz 2> /dev/null
+    ls -v chrUn_*.fa.gz 2> /dev/null
+  )
+  if [[ $random_files != "" ]]
+  then
+    # Add unplaced FASTA files to create "base_random" reference genome
+    mkdir --mode=2700 ${output_path}/base_random/
+    cp ${output_path}/base/${ucsc_build}.fa \
+       ${output_path}/base_random/${ucsc_build}.fa
+    zcat $random_files >> ${output_path}/base_random/${ucsc_build}.fa
+    # Note: hg19 includes filenames with format chr*_hap*.fa.gz;
+    #       hg38 includes filenames with format chr*_alt.fa.gz
+    # Note: '2>' throws away any output from stderr if the files are not found
+    althap_files=$(ls -v chr*_hap*.fa.gz chr*_alt.fa.gz 2> /dev/null)
+    if [[ $althap_files != "" ]]
+    then
+      # Add alternate haplotype FASTA files to create "base_random_althap"
+      # reference genome
+      mkdir --mode=2700 ${output_path}/base_random_althap/
+      cp ${output_path}/base_random/${ucsc_build}.fa \
+         ${output_path}/base_random_althap/${ucsc_build}.fa
+      zcat $althap_files >> ${output_path}/base_random_althap/${ucsc_build}.fa
+    fi
+  fi
+
+  # Make various indices for each concatenated FASTA file
+  for type in $(ls ${output_path}/${type}/)
+  do
+    bwa index -a bwtsw ${output_path}/${type}/${ucsc_build}.fa
+    samtools faidx ${output_path}/${type}/${ucsc_build}.fa
+    # Note: changed $SCC_PICARD_LIB to $SCC_PICARD_BIN following SCC update
+    #       and change from picard 2.9.4 to 2.18.11 - 2019-07-16 ACG
+    java -jar $SCC_PICARD_BIN/picard.jar CreateSequenceDictionary \
+       REFERENCE=${output_path}/${type}/${ucsc_build}.fa \
+       OUTPUT=${output_path}/${type}/${ucsc_build}.dict
+    # Make genome-level directory world-readable and read-only
+    chmod -Rc ugo-w,ugo+rX ${output_path}/${type}/
+  done
+  # Make UCSC-build-level directory world-readable and read-only
+  chmod ugo-w,ugo+rX ${output_path}/
+
+  # Clean up scratch space
+  rm -rf $TMPDIR/*
+fi
