@@ -86,14 +86,13 @@ else
     fi
   done
 
-  # Verify MD5 checksum and print a message, terminating on nonzero exit code
-  # Note: for some reason, this does not work with 'md5sum --check - --status'
-  if [[ $(grep "${fa_gz_file}" md5sum.txt | md5sum --check - --quiet) ]]
+  # Verify MD5 checksum and print a message, terminating on invalid MD5 checksum
+  if $(grep "${fa_gz_file}" md5sum.txt | md5sum --check --status)
   then
+    echo "File '${fa_gz_file}' was retrieved correctly; proceeding."
+  else
     echo "File '${fa_gz_file}' was not retrieved correctly; terminating."
     exit
-  else
-    echo "File '${fa_gz_file}' was retrieved correctly; proceeding."
   fi
 
   # Extract each entry in the fa.gz file to a separate .fa file
