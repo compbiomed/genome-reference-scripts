@@ -37,8 +37,8 @@ done
 if [[ ${ucsc_build} == "" ]]
 then
   echo    "Usage:"
-  echo -n "  qsub make_ucsc_references.qsub [options] "
-  echo    "-b|--build [UCSC genome build]"
+  echo    "  qsub [qsub flags] make_ucsc_references.qsub"
+  echo    "       [options] -b|--build [UCSC genome build]"
   echo    "Options:"
   echo -n "  -b, --build          "
   echo    "UCSC genome build (e.g., hg38, mm10, etc.)"
@@ -59,12 +59,22 @@ else
   module list
 
   # Define URLs
-  ucsc_base_url="hgdownload.cse.ucsc.edu/goldenPath"
-  bigZips_url="ftp://${ucsc_base_url}/${ucsc_build}/bigZips"
+  ucsc_base_url="ftp://hgdownload.cse.ucsc.edu"
+  bigZips_url="${ucsc_base_url}/goldenPath/${ucsc_build}/bigZips"
+  app_url="${ucsc_base_url}/admin/exe/linux.x86_64"
 
   # Define filenames
-  fa_gz_file="${ucsc_build}.fa.gz"
-  bigZips_filenames=(${fa_gz_file} md5sum.txt)
+  twobit_file="${ucsc_build}.2bit"
+  chrom_sizes_file="${ucsc_build}.chrom.sizes"
+  seqList_file="${ucsc_build}.seqList"
+
+  # Define regular expressions
+  # Note: hg19 includes alternative haplotypes in files named chr*_hap*.fa
+  #       hg38 includes alternative haplotypes in files named chr*_alt.fa
+  declare -A regexes=(
+    ["random"]="^chr(.+_.+_random|Un_.+)$"
+    ["althap"]="^chr.+_(alt|hap.+)$"
+  )
 
   # Display the parsed arguments
   echo "UCSC genome build: ${ucsc_build}"
@@ -76,7 +86,7 @@ else
 
   # Try retrieving each file from UCSC to scratch space;
   # if files could not be retrieved due to fatal error, terminate
-  for filename in ${bigZips_filenames[@]}
+  for filename in ${twobit_file} "md5sum.txt"
   do
     wget ${bigZips_url}/${filename}
     if [[ ! -e ${filename} ]]
@@ -87,21 +97,19 @@ else
   done
 
   # Verify MD5 checksum and print a message, terminating on invalid MD5 checksum
-  if $(grep "${fa_gz_file}" md5sum.txt | md5sum --check --status)
+  if $(grep "${twobit_file}" md5sum.txt | md5sum --check --status)
   then
-    echo "File '${fa_gz_file}' was retrieved correctly; proceeding."
+    echo "File '${twobit_file}' was retrieved correctly; proceeding."
   else
-    echo "File '${fa_gz_file}' was not retrieved correctly; terminating."
+    echo "File '${twobit_file}' was not retrieved correctly; terminating."
     exit
   fi
 
-  # Extract each entry in the fa.gz file to a separate .fa file
-  echo "Splitting ${fa_gz_file} into individual .fa files."
-  zcat ${fa_gz_file} | csplit --digits=4 - "%>%" "/>/" "{*}"
-  # Rename the .fa files based on the header line
-  for fa_file in xx*
+  # Retrieve UCSC apps and make them executable
+  for app in twoBitInfo twoBitToFa
   do
-    mv -v ${fa_file} "$(head -n 1 ${fa_file} | cut -f2 -d'>').fa"
+    wget ${app_url}/${app}
+    chmod +x ${app}
   done
 
   # Create the output path if it does not already exist
@@ -109,71 +117,49 @@ else
   # Ensure directory is not world-readable yet (to keep others out until ready)
   chmod 2700 "${output_path}"/
 
-  # List "base" FASTA files (autosomes, X, Y, mtDNA)
-  # Note: 'ls -v' is used to sort in "version" order instead of using default
-  #       lexicographic sort (e.g., 1-22,X,Y instead of 1,10-19,2,20-22,3-9,X,Y)
-  #       and chrM is listed separately so that it is placed after chrX and chrY
-  base_files=(
-    $(
-      ls -v chr*.fa | grep -P "^chr([1-9][0-9]*|[XY])\.fa$"
-      ls chrM.fa
-    )
-  )
-  # Concatenate "base" FASTA files to create "base" reference genome
-  mkdir --verbose --mode=2700 "${output_path}"/base/
-  cat "${base_files[@]}" > "${output_path}"/base/${ucsc_build}.fa
+  # Generate chrom.sizes file from .2bit file
+  ./twoBitInfo "${twobit_file}" "${chrom_sizes_file}"
 
-  # Get a list of any FASTQ files corresponding to "random" contigs
-  # Note: two listings are used to ensure that chr[XY]_*_random.fa appears
-  #       before chrUn_*.fa
-  # Note: '2>' throws away any output from stderr if the files are not found
-  random_files=(
-    $(
-      ls -v chr*_*_random.fa 2> /dev/null
-      ls -v chrUn_*.fa 2> /dev/null
-    )
-  )
-  if [[ ${#random_files[@]} > 0 ]]
-  then
-    # Add unplaced FASTA files to create "base_random" reference genome
-    mkdir --verbose --mode=2700 "${output_path}"/base_random/
-    cp "${output_path}"/base/${ucsc_build}.fa \
-       "${output_path}"/base_random/${ucsc_build}.fa
-    cat "${random_files[@]}" >> "${output_path}"/base_random/${ucsc_build}.fa
-
-    # Get a list of any alternative haplotype FASTA files
-    # Note: hg19 includes filenames with format chr*_hap*.fa;
-    #       hg38 includes filenames with format chr*_alt.fa
-    # Note: '2>' throws away any output from stderr if the files are not found
-    althap_files=($(ls -v chr*_alt.fa chr*_hap*.fa 2> /dev/null))
-    if [[ ${#althap_files[@]} > 0 ]]
-    then
-      # Add alternative haplotype FASTA files to create
-      # "base_random_althap" reference genome
-      mkdir --verbose --mode=2700 "${output_path}"/base_random_althap/
-      cp "${output_path}"/base_random/${ucsc_build}.fa \
-         "${output_path}"/base_random_althap/${ucsc_build}.fa
-      cat "${althap_files[@]}" >> \
-        "${output_path}"/base_random_althap/${ucsc_build}.fa
-    fi
-  fi
-
-  cd "${output_path}"/ || exit
-
-  # Make indices and sequence dictionary for each concatenated FASTA file
-  for type in *
+  # Iterate over each subset of contigs,
+  # adding them sequentially (if they are included) to a new FASTA reference
+  for chrom_subset in base random althap
   do
-    bwa index -a bwtsw "${output_path}"/${type}/${ucsc_build}.fa
-    samtools faidx "${output_path}"/${type}/${ucsc_build}.fa
+    if [[ ${chrom_subset} == "base" ]]
+    then
+      # Initialize contig set name
+      chrom_set_name="${chrom_subset}"
+      # Extract list of "base" contigs to text file
+      # (i.e., those that do _not_ match any of the regexes)
+      cut -f1 "${chrom_sizes_file}" \
+        | grep -E -v -f <(printf "%s\n" "${regexes[@]}") \
+        > "${seqList_file}"
+    else
+      # If any contigs match the regex corresponding to the subset, proceed
+      if grep -E -q "${regexes[${chrom_subset}]}" "${chrom_sizes_file}"
+      then
+        # Append subset name to contig set name
+        chrom_set_name="${chrom_set_name}_${chrom_subset}"
+        # Append any contigs that match the regex to the text file
+        cut -f1 "${chrom_sizes_file}" | grep -E "${regexes[${chrom_subset}]}" \
+          >> "${seqList_file}"
+      else
+        break
+      fi
+    fi
+    # If the for-loop was not exited, create a directory named after contig set
+    mkdir --verbose --mode=2700 "${output_path}"/${chrom_set_name}/
+    # Generate a FASTA file from the .2bit file
+    fa_file="${output_path}"/${chrom_set_name}/${ucsc_build}.fa
+    ./twoBitToFa -seqList="${seqList_file}" "${twobit_file}" "${fa_file}"
+    # Make indices and sequence dictionary from the FASTA file
+    bwa index -a bwtsw "${fa_file}"
+    samtools faidx "${fa_file}"
     # Note: this step calls a wrapper script named 'picard' that calls Java
     #       with the 'picard.jar' file and 2GB maximum heap size
     picard CreateSequenceDictionary \
-       REFERENCE="${output_path}"/${type}/${ucsc_build}.fa \
-       OUTPUT="${output_path}"/${type}/${ucsc_build}.dict
+      REFERENCE="${fa_file}" OUTPUT="${fa_file%.fa}.dict"
   done
-  # Make all output files and directories world-readable and read-only
-  chmod -Rc ugo-w,ugo+rX .
 
-  # Clean up scratch space
-  rm -rf ${TMPDIR:?}/*
+  # Make all output files and directories world-readable and read-only
+  chmod -Rc ugo-w,ugo+rX "${output_path}"/
 fi

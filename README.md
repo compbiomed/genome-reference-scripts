@@ -5,7 +5,10 @@ These scripts are intended for use with a cluster running [Grid Engine](https://
 ### `make_ucsc_references.qsub`
 
 Usage:
-`  qsub make_ucsc_references.qsub [options] -b|--build [UCSC genome build]`
+```
+  qsub [qsub flags] make_ucsc_references.qsub
+       [options] -b|--build [UCSC genome build]
+```
 Options:
 ```
   -b, --build          UCSC genome build (e.g., hg38, mm10, etc.)
@@ -18,7 +21,10 @@ Note: this step calls a wrapper script named `picard` that calls Java with the `
 ### `generate_ucsc_star_genomes.qsub`
 
 Usage:
-`  qsub generate_ucsc_star_genomes.qsub [options] -b|--build [UCSC genome build] -f|--fasta-path [Path to FASTA files]`
+```
+  qsub [qsub flags] generate_ucsc_star_genomes.qsub
+       [options] -b|--build [UCSC genome build] -f|--fasta-path [Path to FASTA files]
+```
 Options:
 ```
   -b, --build           UCSC genome build (e.g., hg38, mm10, etc.)

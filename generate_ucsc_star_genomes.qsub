@@ -43,8 +43,8 @@ done
 if [[ ${ucsc_build} == "" ]]
 then
   echo    "Usage:"
-  echo -n "  qsub generate_ucsc_star_genomes.qsub [options] "
-  echo    "-b|--build [UCSC genome build]"
+  echo    "  qsub [qsub flags] generate_ucsc_star_genomes.qsub"
+  echo -n "       [options] -b|--build [UCSC genome build] "
   echo    "-f|--fasta-path [Path to FASTA files]"
   echo    "Options:"
   echo    "  -b, --build           UCSC genome build (e.g., hg38, mm10, etc.)"
@@ -112,7 +112,4 @@ else
   done
   # Make all output files and directories world-readable and read-only
   chmod -Rc ugo-w,ugo+rX ${output_path}/
-
-  # Clean up scratch space
-  rm -rf ${TMPDIR:?}/*
 fi
