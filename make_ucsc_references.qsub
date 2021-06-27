@@ -130,18 +130,23 @@ else
       chrom_set_name="${chrom_subset}"
       # Extract list of "base" contigs to text file
       # (i.e., those that do _not_ match any of the regexes)
-      cut -f1 "${chrom_sizes_file}" \
-        | grep -E -v -f <(printf "%s\n" "${regexes[@]}") \
-        > "${seqList_file}"
+      readarray -t contigs < <(
+        cut -f1 "${chrom_sizes_file}" | \
+        grep -E -v -f <(printf "%s\n" "${regexes[@]}")
+      )
+      printf "%s\n" ${contigs[@]} > "${seqList_file}"
     else
-      # If any contigs match the regex corresponding to the subset, proceed
-      if grep -E -q "${regexes[${chrom_subset}]}" "${chrom_sizes_file}"
+      # Get array of contigs matching the regex for the current subset
+      readarray -t contigs < <(
+        cut -f1 "${chrom_sizes_file}" | grep -E "${regexes[${chrom_subset}]}"
+      )
+      # If any contigs match the regex, proceed
+      if [[ ${#contigs[@]} -gt 0 ]]
       then
         # Append subset name to contig set name
         chrom_set_name="${chrom_set_name}_${chrom_subset}"
         # Append any contigs that match the regex to the text file
-        cut -f1 "${chrom_sizes_file}" | grep -E "${regexes[${chrom_subset}]}" \
-          >> "${seqList_file}"
+        printf "%s\n" ${contigs[@]} >> "${seqList_file}"
       else
         break
       fi
