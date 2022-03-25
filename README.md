@@ -16,21 +16,42 @@ Options:
                        (Default: ./[UCSC genome build]/)
 ```
 
-Note: this step calls a wrapper script named `picard` that calls Java with the `picard.jar` file and 2GB maximum heap size.
+Note: this script calls a wrapper script named `picard` that calls Java with the `picard.jar` file and 2GB maximum heap size.
 
-### `generate_ucsc_star_genomes.qsub`
+### `make_assembly_references.qsub`
 
 Usage:
 ```
-  qsub [qsub flags] generate_ucsc_star_genomes.qsub
-       [options] -b|--build [UCSC genome build] -f|--fasta-path [Path to FASTA files]
+  qsub [qsub flags] make_assembly_references.qsub [options]
+       -a|--assembly [assembly]
+       -r|--refseq [RefSeq accession]
 ```
 Options:
 ```
-  -b, --build           UCSC genome build (e.g., hg38, mm10, etc.)
+  -a, --assembly       genome assembly (e.g., 'MesAur1.0')
+  -r, --refseq         genome RefSeq accession (e.g., 'GCF_000349665.1')
+  -o, --output-path    Path where output will be written (will be created if it does not exist)
+                       (Default: ./[assembly]/)
+```
+
+Note: this script calls a wrapper script named `picard` that calls Java with the `picard.jar` file and 2GB maximum heap size.
+
+### `generate_star_genomes.qsub`
+
+Usage:
+```
+  qsub [qsub flags] generate_star_genomes.qsub [options]
+       -r|--reference [reference name]
+       -f|--fasta-path [Path to FASTA files]
+```
+Options:
+```
+  -r, --reference       Reference name
+                        (e.g., hg38, mm10, bosTau9, MesAur1.0, etc.)
   -f, --fasta-path      Path to FASTA input files
+                        (i.e., path containing 'base' folder, etc.)
   -o, --output-path     Path where output will be written (will be created if it does not exist)
-                        (Default: ./[STAR version]/ucsc/[UCSC genome build]/)
+                        (Default: ./[STAR version]/[reference name]/)
   -s, --star-version    Version of STAR to use
-                        (if omitted, default STAR module is used)
+                        (if omitted, default STAR version is used)
 ```

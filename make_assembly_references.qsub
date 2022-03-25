@@ -1,0 +1,171 @@
+#!/bin/bash -l
+#$ -S /bin/bash
+#$ -cwd
+#$ -j y
+#$ -m eas
+#$ -N make_assembly_references
+
+# Build a set of reference FASTA files and indexes for a given RefSeq accession
+
+# Adam Gower, based on script by Josh Campbell, originally derived from:
+# https://github.com/infphilo/hisat2/tree/master/scripts/make_hg19.sh
+
+# Parse command-line arguments
+eval set -- "$(
+  getopt --options=a:r:o: \
+         --longoptions=assembly:,refseq:,output-path: \
+         --name "$0" -- "$@"
+)"
+
+while true
+do
+  case "$1" in
+    -a|--assembly)
+      assembly="$2"
+      shift 2 ;;
+    -r|--refseq)
+      refseq_accession="$2"
+      shift 2 ;;
+    -o|--output-path)
+      output_path="$(readlink --canonicalize "$2")"
+      shift 2 ;;
+    --)
+      shift
+      break ;;
+    *)
+      echo "Internal error"
+      exit 1 ;;
+  esac
+done
+
+if [[ ${assembly} == "" || ${refseq_accession} == "" ]]
+then
+  echo    "Usage:"
+  echo    "  qsub [qsub flags] make_assembly_references.qsub [options]"
+  echo    "       -a|--assembly [assembly]"
+  echo    "       -r|--refseq [RefSeq accession]"
+  echo    "Options:"
+  echo -n "  -a, --assembly       "
+  echo    "genome assembly (e.g., 'MesAur1.0')"
+  echo -n "  -r, --refseq         "
+  echo    "genome RefSeq accession (e.g., 'GCF_000349665.1')"
+  echo -n "  -o, --output-path    "
+  echo -n "Path where output will be written "
+  echo    "(will be created if it does not exist)"
+  echo    "                       (Default: ./[assembly]/)"
+else
+  # If output path is not specified, a directory named for the assembly
+  # will be created within the current working directory, and output will
+  # be written there
+  [[ "${output_path}" == "" ]] && output_path="$(pwd)/${assembly}"
+
+  # Load and list modules
+  module load bwa
+  module load picard
+  module load samtools
+  module list
+
+  # Extract numeric suffix from RefSeq accession
+  suffix=${refseq_accession/GCF_/}
+
+  # Define URLs
+  ucsc_base_url="https://hgdownload.soe.ucsc.edu"
+  assembly_url="${ucsc_base_url}/hubs/GCF"
+  assembly_url="${assembly_url}/${suffix:0:3}/${suffix:3:3}/${suffix:6:3}"
+  assembly_url="${assembly_url}/${refseq_accession}"
+  app_url="${ucsc_base_url}/admin/exe/linux.x86_64"
+
+  # Define filenames
+  twobit_file="${refseq_accession}.2bit"
+  chrom_sizes_file="${refseq_accession}.chrom.sizes"
+  seqList_file="${refseq_accession}.seqList"
+
+  # Define regular expressions
+  # Note: hg19 includes alternative haplotypes in files named chr*_hap*.fa
+  #       hg38 includes alternative haplotypes in files named chr*_alt.fa
+  declare -A regexes=(
+    ["random"]="^chr(.+_.+_random|Un_.+)$"
+    ["althap"]="^chr.+_(alt|hap.+)$"
+  )
+
+  # Display the parsed arguments
+  echo "Genome assembly: ${assembly}"
+  echo "Genome RefSeq accession: ${refseq_accession}"
+  echo "FASTA file and indexes will be written to: ${output_path}/"
+
+  # Prepare for download
+  cd $TMPDIR/ || exit
+  echo "Retrieving files from ${assembly_url}/ to: $TMPDIR"
+
+  # Try retrieving .2bit file from UCSC to scratch space;
+  # if file could not be retrieved due to fatal error, terminate
+  wget ${assembly_url}/${twobit_file}
+  if [[ ! -e ${twobit_file} ]]
+  then
+    echo "File '${twobit_file}' could not be retrieved; terminating."
+    exit
+  fi
+
+  # Retrieve UCSC apps and make them executable
+  for app in twoBitInfo twoBitToFa
+  do
+    wget ${app_url}/${app}
+    chmod +x ${app}
+  done
+
+  # Create the output path if it does not already exist
+  [ ! -d "${output_path}" ] && mkdir --verbose -p "${output_path}"/ 
+  # Ensure directory is not world-readable yet (to keep others out until ready)
+  chmod 2700 "${output_path}"/
+
+  # Generate chrom.sizes file from .2bit file
+  ./twoBitInfo "${twobit_file}" "${chrom_sizes_file}"
+
+  # Iterate over each subset of contigs,
+  # adding them sequentially (if they are included) to a new FASTA reference
+  for chrom_subset in base random althap
+  do
+    if [[ ${chrom_subset} == "base" ]]
+    then
+      # Initialize contig set name
+      chrom_set_name="${chrom_subset}"
+      # Extract list of "base" contigs to text file
+      # (i.e., those that do _not_ match any of the regexes)
+      readarray -t contigs < <(
+        cut -f1 "${chrom_sizes_file}" | \
+        grep -E -v -f <(printf "%s\n" "${regexes[@]}")
+      )
+      printf "%s\n" ${contigs[@]} > "${seqList_file}"
+    else
+      # Get array of contigs matching the regex for the current subset
+      readarray -t contigs < <(
+        cut -f1 "${chrom_sizes_file}" | grep -E "${regexes[${chrom_subset}]}"
+      )
+      # If any contigs match the regex, proceed
+      if [[ ${#contigs[@]} -gt 0 ]]
+      then
+        # Append subset name to contig set name
+        chrom_set_name="${chrom_set_name}_${chrom_subset}"
+        # Append any contigs that match the regex to the text file
+        printf "%s\n" ${contigs[@]} >> "${seqList_file}"
+      else
+        break
+      fi
+    fi
+    # If the for-loop was not exited, create a directory named after contig set
+    mkdir --verbose --mode=2700 "${output_path}"/${chrom_set_name}/
+    # Generate a FASTA file from the .2bit file
+    fa_file="${output_path}"/${chrom_set_name}/${assembly}.fa
+    ./twoBitToFa -seqList="${seqList_file}" "${twobit_file}" "${fa_file}"
+    # Make indices and sequence dictionary from the FASTA file
+    bwa index -a bwtsw "${fa_file}"
+    samtools faidx "${fa_file}"
+    # Note: this step calls a wrapper script named 'picard' that calls Java
+    #       with the 'picard.jar' file and 2GB maximum heap size
+    picard CreateSequenceDictionary \
+      REFERENCE="${fa_file}" OUTPUT="${fa_file%.fa}.dict"
+  done
+
+  # Make all output files and directories world-readable and read-only
+  chmod -Rc ugo-w,ugo+rX "${output_path}"/
+fi

@@ -4,23 +4,23 @@
 #$ -j y
 #$ -m eas
 #$ -pe omp 8
-#$ -N generate_ucsc_star_genomes
+#$ -N generate_star_genomes
 
-# Build a set of STAR genomes for a given UCSC build
+# Build a set of STAR genomes for a given reference
 # Adam Gower, based on scripts by Josh Campbell
 
 # Parse command-line arguments
 eval set -- "$(
-  getopt --options=b:f:o:s: \
-         --longoptions=build:,fasta-path:,output-path:,star-version: \
+  getopt --options=r:f:o:s: \
+         --longoptions=reference:,fasta-path:,output-path:,star-version: \
          --name "$0" -- "$@"
 )"
 
 while true
 do
   case "$1" in
-    -b|--build)
-      ucsc_build="$2"
+    -r|--reference)
+      reference="$2"
       shift 2 ;;
     -f|--fasta-path)
       fasta_path="$(readlink --canonicalize "$2")"
@@ -40,26 +40,28 @@ do
   esac
 done
 
-if [[ ${ucsc_build} == "" ]]
+if [[ ${reference} == "" ]]
 then
   echo    "Usage:"
-  echo    "  qsub [qsub flags] generate_ucsc_star_genomes.qsub"
-  echo -n "       [options] -b|--build [UCSC genome build] "
-  echo    "-f|--fasta-path [Path to FASTA files]"
+  echo    "  qsub [qsub flags] generate_star_genomes.qsub [options]"
+  echo    "       -r|--reference [reference name]"
+  echo    "       -f|--fasta-path [Path to FASTA files]"
   echo    "Options:"
-  echo    "  -b, --build           UCSC genome build (e.g., hg38, mm10, etc.)"
+  echo    "  -r, --reference       Reference name"
+  echo    "                        (e.g., hg38, mm10, bosTau9, MesAur1.0, etc.)"
   echo    "  -f, --fasta-path      Path to FASTA input files"
+  echo    "                        (i.e., path containing 'base' folder, etc.)"
   echo -n "  -o, --output-path     "
   echo -n "Path where output will be written "
   echo    "(will be created if it does not exist)"
   echo -n "                        "
-  echo    "(Default: ./[STAR version]/ucsc/[UCSC genome build]/)"
+  echo    "(Default: ./[STAR version]/[reference name]/)"
   echo    "  -s, --star-version    Version of STAR to use"
-  echo    "                        (if omitted, default STAR module is used)"
+  echo    "                        (if omitted, default STAR version is used)"
 else
   if [[ ${star_version} == "" ]]
   then
-    # If no module version was specified, load the default module
+    # If no STAR version was specified, load the default module
     module load star
   else
     # Check whether a valid module version was specified
@@ -79,14 +81,14 @@ else
   # and output will be written there
   if [[ "${output_path}" == "" ]]
   then
-    output_path="$(pwd)/${star_version}/ucsc/${ucsc_build}"
+    output_path="$(pwd)/${star_version}/${reference}"
   fi
   # Create the output path if it does not already exist
   [ ! -d "${output_path}" ] && mkdir --verbose -p "${output_path}"/ 
   # Ensure directory is not world-readable yet (to keep others out until ready)
   chmod 2700 "${output_path}"/
 
-  echo "UCSC genome build: ${ucsc_build}"
+  echo "Reference name: ${reference}"
   echo "FASTA input files located in: ${fasta_path}/"
   echo "STAR version: ${star_version}"
   echo "STAR genomes will be written to: ${output_path}/"
@@ -105,7 +107,7 @@ else
     STAR \
       --runMode genomeGenerate \
       --genomeDir "${output_path}"/${type} \
-      --genomeFastaFiles "${fasta_path}"/${type}/${ucsc_build}.fa \
+      --genomeFastaFiles "${fasta_path}"/${type}/${reference}.fa \
       --outFileNamePrefix "${output_path}"/${type}/ \
       --outTmpDir $TMPDIR/${type} \
       --runThreadN $NSLOTS
