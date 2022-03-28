@@ -18,20 +18,20 @@ Options:
 
 Note: this script calls a wrapper script named `picard` that calls Java with the `picard.jar` file and 2GB maximum heap size.
 
-### `make_assembly_references.qsub`
+### `make_ncbi_assembly_references.qsub`
 
 Usage:
 ```
-  qsub [qsub flags] make_assembly_references.qsub [options]
-       -a|--assembly [assembly]
-       -r|--refseq [RefSeq accession]
+  qsub [qsub flags] make_ncbi_assembly_references.qsub [options]
+       -a|--assembly [assembly name]
+       -n|--ncbi [NCBI accession]
 ```
 Options:
 ```
-  -a, --assembly       genome assembly (e.g., 'MesAur1.0')
-  -r, --refseq         genome RefSeq accession (e.g., 'GCF_000349665.1')
+  -a, --assembly       genome assembly name (e.g., 'A_J_v1', 'MesAur1.0')
+  -n, --ncbi           NCBI accession (e.g., 'GCA_001624215.1', 'GCF_000349665.1')
   -o, --output-path    Path where output will be written (will be created if it does not exist)
-                       (Default: ./[assembly]/)
+                       (Default: ./[assembly name]/)
 ```
 
 Note: this script calls a wrapper script named `picard` that calls Java with the `picard.jar` file and 2GB maximum heap size.

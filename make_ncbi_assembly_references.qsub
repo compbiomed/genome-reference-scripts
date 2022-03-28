@@ -3,17 +3,17 @@
 #$ -cwd
 #$ -j y
 #$ -m eas
-#$ -N make_assembly_references
+#$ -N make_ncbi_assembly_references
 
-# Build a set of reference FASTA files and indexes for a given RefSeq accession
+# Build reference FASTA files and indexes for a given NCBI genome assembly
 
 # Adam Gower, based on script by Josh Campbell, originally derived from:
 # https://github.com/infphilo/hisat2/tree/master/scripts/make_hg19.sh
 
 # Parse command-line arguments
 eval set -- "$(
-  getopt --options=a:r:o: \
-         --longoptions=assembly:,refseq:,output-path: \
+  getopt --options=a:n:o: \
+         --longoptions=assembly:,ncbi:,output-path: \
          --name "$0" -- "$@"
 )"
 
@@ -23,8 +23,8 @@ do
     -a|--assembly)
       assembly="$2"
       shift 2 ;;
-    -r|--refseq)
-      refseq_accession="$2"
+    -n|--ncbi)
+      ncbi_accession="$2"
       shift 2 ;;
     -o|--output-path)
       output_path="$(readlink --canonicalize "$2")"
@@ -38,21 +38,21 @@ do
   esac
 done
 
-if [[ ${assembly} == "" || ${refseq_accession} == "" ]]
+if [[ ${assembly} == "" || ${ncbi_accession} == "" ]]
 then
   echo    "Usage:"
-  echo    "  qsub [qsub flags] make_assembly_references.qsub [options]"
-  echo    "       -a|--assembly [assembly]"
-  echo    "       -r|--refseq [RefSeq accession]"
+  echo    "  qsub [qsub flags] make_ncbi_assembly_references.qsub [options]"
+  echo    "       -a|--assembly [assembly name]"
+  echo    "       -n|--ncbi [NCBI accession]"
   echo    "Options:"
   echo -n "  -a, --assembly       "
-  echo    "genome assembly (e.g., 'MesAur1.0')"
-  echo -n "  -r, --refseq         "
-  echo    "genome RefSeq accession (e.g., 'GCF_000349665.1')"
+  echo    "genome assembly name (e.g., 'A_J_v1', 'MesAur1.0')"
+  echo -n "  -r, --ncbi           "
+  echo    "NCBI accession (e.g., 'GCA_001624215.1', 'GCF_000349665.1')"
   echo -n "  -o, --output-path    "
   echo -n "Path where output will be written "
   echo    "(will be created if it does not exist)"
-  echo    "                       (Default: ./[assembly]/)"
+  echo    "                       (Default: ./[assembly name]/)"
 else
   # If output path is not specified, a directory named for the assembly
   # will be created within the current working directory, and output will
@@ -65,20 +65,20 @@ else
   module load samtools
   module list
 
-  # Extract numeric suffix from RefSeq accession
-  suffix=${refseq_accession/GCF_/}
-
   # Define URLs
   ucsc_base_url="https://hgdownload.soe.ucsc.edu"
-  assembly_url="${ucsc_base_url}/hubs/GCF"
-  assembly_url="${assembly_url}/${suffix:0:3}/${suffix:3:3}/${suffix:6:3}"
-  assembly_url="${assembly_url}/${refseq_accession}"
+  assembly_url="${ucsc_base_url}/hubs"
+  assembly_url="${assembly_url}/${ncbi_accession:0:3}"
+  assembly_url="${assembly_url}/${ncbi_accession:4:3}"
+  assembly_url="${assembly_url}/${ncbi_accession:7:3}"
+  assembly_url="${assembly_url}/${ncbi_accession:10:3}"
+  assembly_url="${assembly_url}/${ncbi_accession}"
   app_url="${ucsc_base_url}/admin/exe/linux.x86_64"
 
   # Define filenames
-  twobit_file="${refseq_accession}.2bit"
-  chrom_sizes_file="${refseq_accession}.chrom.sizes"
-  seqList_file="${refseq_accession}.seqList"
+  twobit_file="${ncbi_accession}.2bit"
+  chrom_sizes_file="${ncbi_accession}.chrom.sizes"
+  seqList_file="${ncbi_accession}.seqList"
 
   # Define regular expressions
   # Note: hg19 includes alternative haplotypes in files named chr*_hap*.fa
@@ -89,8 +89,8 @@ else
   )
 
   # Display the parsed arguments
-  echo "Genome assembly: ${assembly}"
-  echo "Genome RefSeq accession: ${refseq_accession}"
+  echo "Genome assembly name: ${assembly}"
+  echo "NCBI accession: ${ncbi_accession}"
   echo "FASTA file and indexes will be written to: ${output_path}/"
 
   # Prepare for download
