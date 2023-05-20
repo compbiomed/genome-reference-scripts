@@ -59,7 +59,7 @@ else
   module list
 
   # Define URLs
-  ucsc_base_url="ftp://hgdownload.cse.ucsc.edu"
+  ucsc_base_url="ftp://anonymous@hgdownload.cse.ucsc.edu"
   bigZips_url="${ucsc_base_url}/goldenPath/${ucsc_build}/bigZips"
   app_url="${ucsc_base_url}/admin/exe/linux.x86_64"
 
