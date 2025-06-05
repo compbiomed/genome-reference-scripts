@@ -61,7 +61,9 @@ else
   # Define URLs
   ucsc_base_url="ftp://anonymous@hgdownload.cse.ucsc.edu"
   bigZips_url="${ucsc_base_url}/goldenPath/${ucsc_build}/bigZips"
-  app_url="${ucsc_base_url}/admin/exe/linux.x86_64"
+  # Note: this uses a specific version of the UCSC utilities built using a
+  #       version of GLIBC that is supported on the BU SCC.
+  app_url="${ucsc_base_url}/admin/exe/linux.x86_64.v385"
 
   # Define filenames
   twobit_file="${ucsc_build}.2bit"

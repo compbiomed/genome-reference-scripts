@@ -73,7 +73,9 @@ else
   assembly_url="${assembly_url}/${ncbi_accession:7:3}"
   assembly_url="${assembly_url}/${ncbi_accession:10:3}"
   assembly_url="${assembly_url}/${ncbi_accession}"
-  app_url="${ucsc_base_url}/admin/exe/linux.x86_64"
+  # Note: this uses a specific version of the UCSC utilities built using a
+  #       version of GLIBC that is supported on the BU SCC.
+  app_url="${ucsc_base_url}/admin/exe/linux.x86_64.v385"
 
   # Define filenames
   twobit_file="${ncbi_accession}.2bit"
